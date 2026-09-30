@@ -1,8 +1,34 @@
 # advanced-web-search
 
-通用联网搜索与研究执行器：一个 Python 脚本集合，把**多引擎网页搜索、网页正文提取、四种跨模态检索（文搜网/文搜图/图搜文/图搜图）与深度研究**装进同一个可离线部署的目录。免 key 即可用（HTML 引擎），付费引擎全部可选、按次计费、默认关闭或按需调用。
+**一个 agent skill（智能体技能包）**：通用联网搜索与研究执行器——一套 Python 脚本集合，把**多引擎网页搜索、网页正文提取、四种跨模态检索（文搜网/文搜图/图搜文/图搜图）与深度研究**装进同一个可离线部署的目录。免 key 即可用（HTML 引擎），付费引擎全部可选、按次计费、默认关闭或按需调用。
 
 > 给 agent 读的完整用法在 [SKILL.md](SKILL.md)；本文写给人类使用者。
+
+## 安装与定位（这是一个 skill）
+
+**它是给 AI 助手用的 skill，不是给你直接点开的软件。** 工作方式是：你正常对 AI 说"帮我查查 XX"，AI 自己到这个目录里拿工具干活。
+
+安装（放进支持 skill 的 AI 工具的技能目录，以 ZCode 为例）：
+
+```bash
+git clone https://github.com/Solara1020/advanced-web-search.git ~/.agents/skills/advanced-web-search
+pip install requests beautifulsoup4 jieba   # 核心依赖，增强层见"快速开始"
+```
+
+装好后 AI 在新会话里自动发现它（入口是 [SKILL.md](SKILL.md)），无需注册或配置；不配任何密钥也能用免 key 引擎。
+
+```mermaid
+flowchart TB
+    Q["你的一句话问题"] --> S["advanced-web-search（agent skill）"]
+    S --> A["搜索层：9 引擎<br/>自动降级 · RRF 融合 · 共识检测"]
+    S --> B["阅读层：网页正文提取<br/>四层降级，反爬站也进得去"]
+    S --> C["多模态层：文搜图 · 图搜图 · OCR · 文搜视频"]
+    S --> D["研究层：deep_search<br/>拆解 → 并发 → 补漏 → 带引用报告"]
+    A --> R["结果：带来源 / 共识等级 / 广告标注"]
+    B --> R
+    C --> R
+    D --> R
+```
 
 ## 这是什么（小白版）
 
@@ -38,6 +64,20 @@
 | 深度研究 | Planner 拆解 → 并发搜索 → 缺口补搜 → 带引用报告 | — |
 | 结果后处理 | `--rerank`（/v1/rerank 真端点）/ `--embed` 向量化（默认关闭） | — |
 | 查询缓存 | sqlite，TTL 6h，省按次费 | ✅ |
+
+## 一次搜索都发生了什么
+
+```mermaid
+flowchart LR
+    q["查询词"] --> cache{"缓存命中？<br/>TTL 6h"}
+    cache -- "是" --> o
+    cache -- "否" --> e["多引擎并发<br/>tavily · zhipu · bailian · bing · 百度 · ddg"]
+    e --> d["URL 去重<br/>跨引擎合并"]
+    d --> g["相关性守门 + 分档<br/>high / low · 零相关告警"]
+    g --> cv["共识检测<br/>几条引擎共同命中"]
+    cv --> ad["广告软文过滤<br/>打标下沉，可一键丢弃"]
+    ad --> o["结果：带来源与全部标注的 JSON"]
+```
 
 ## 快速开始
 
@@ -78,6 +118,12 @@ python scripts/read_page.py "https://example.com/article"
 - `references/engine-comparison.md` — 引擎多维对比与选型决策（实测数据）
 - `HISTORY.md` — 从旧工作流到开源的完整历程
 - `references/engines.md` — 引擎细节、实测边界与踩坑记录
+
+## 版本与发布
+
+- 版本号规则：`vX.Y.Z`（大功能 / 小升级 / 修复）。
+- 每个版本对应一个 git tag，并在 [Releases](https://github.com/Solara1020/advanced-web-search/releases) 页有一份独立的更新说明——可以像翻书一样一个版本一个版本地看改了什么。
+- 当前版本：**v3.2.1**。
 
 ## 借鉴与致谢
 
