@@ -1,0 +1,112 @@
+{
+  "_说明_": "可选定制层：删掉本文件或留 {} 即用全默认。命令行参数优先。密钥一律用环境变量（api_keys 段只写 env 占位，写明文会被忽略）。",
+  "engine_priority": [
+    "tavily",
+    "zhipu",
+    "bailian",
+    "enhanced_search",
+    "bing_html",
+    "baidu_html",
+    "ddg_html"
+  ],
+  "default_count": 10,
+  "default_language": "zh",
+  "timeout_seconds": 15,
+  "download_dir": "",
+  "ocr_langs": [
+    "ch_sim",
+    "en"
+  ],
+  "rescore_domains": [
+    "gov.cn",
+    "edu.cn"
+  ],
+  "extra_headers": {},
+  "api_keys": {
+    "tavily": "env",
+    "dashscope": "env"
+  },
+  "proxy_vpn": "http://127.0.0.1:7890",
+  "vpn_engines": [
+    "ddg_html"
+  ],
+  "dmxapi": {
+    "base_url": "https://www.dmxapi.cn/v1",
+    "key_source": "env:DMXAPI_KEY 或 .zcode/v2/config.json 中 DMXAPI provider（运行时读取，不落盘）"
+  },
+  "tavily": {
+    "api_base": "https://api.tavily.com",
+    "search_depth": "basic",
+    "_说明": "api_base 可指向代理/镜像；search_depth 可换 advanced（更慢更全）"
+  },
+  "dashscope": {
+    "mcp_base": "https://dashscope.aliyuncs.com/api/v1/mcps",
+    "_说明": "bailian=WebSearch/mcp、enhanced_search=EnhancedSearch/mcp 共用此前缀；换端点只改这里"
+  },
+  "cache": {
+    "enabled": true,
+    "ttl_hours": 6,
+    "path": "",
+    "_说明": "查询结果缓存（sqlite，默认 skill 根目录 cache.db）。命中时输出带 cache{hit,age_minutes} 元信息，时效敏感查询请 --no-cache 或调小 ttl_hours；空结果不缓存"
+  },
+  "embed": {
+    "enabled": false,
+    "model": "text-embedding-3-large",
+    "fallback_model": "Qwen/Qwen3-Embedding-8B",
+    "batch": 50,
+    "_说明": "效果优先：3-large 为 OpenAI 旗舰 3072 维（0.65元/M）；中文备选 Qwen3-Embedding-8B（0.28元/M）"
+  },
+  "rerank": {
+    "enabled": false,
+    "model": "qwen3-rerank",
+    "topk": 20,
+    "_说明": "效果优先：qwen3-rerank（0.5元/M）；/v1/rerank 真端点 2026-09-12 实测 200（0.61/0.47/0.10），端点失败自动回退 embedding 余弦重排"
+  },
+  "image_engines": [
+    "zhipu_image",
+    "baidu_image",
+    "yandex"
+  ],
+  "cross_verify": {
+    "engines": 3,
+    "title_overlap": 0.6,
+    "min_number_engines": 2,
+    "_说明": "--cross-verify 默认并发引擎数（N 省略时用本值）；title_overlap=标题实词包含度阈值（同事件转载归并）；min_number_engines=数字共识的最少引擎数。注意默认池前 3 个含付费引擎，省钱请显式 --engine bing_html,baidu_html,zhipu"
+  },
+  "ad_filter": {
+    "enabled": true,
+    "min_signals": 2,
+    "keywords": [],
+    "strong_keywords": [],
+    "brand_keywords": [],
+    "whitelist_domains": [],
+    "_说明": "软文/招生广告识别：多信号（营销话术/违规承诺/联系方式/价格费用/机构特征/机构品牌）命中 >=min_signals 组才判；只打标下沉不删（--no-ads 才删）。whitelist_domains 在内置 gov.cn/edu.cn/chsi.com.cn/cqksy.cn 等之上追加；keywords/brand_keywords 为追加项（内置已有常见词与品牌）"
+  },
+  "mcp": {
+    "broker_base": "https://open.bigmodel.cn/api/mcp-broker/proxy/{service}/mcp",
+    "services": {
+      "wiki": "wiki",
+      "image-search": "image-search"
+    },
+    "_说明": "智谱 MCP broker（用 secrets.json 的 zhipu key，无需另注册）。已接入服务：wiki=Wikimedia 百科词条（tool wikipediaSearch，0.01元/次）；image-search=图像搜索 5 工具（search_image 文搜图 / image_search_with_image 反向图搜 / text_search_with_image 图出处 / image_zoom_in_search_tool 区域放大 / web_search 文本网页 5条每页——最后这个与 zhipu search_std 重复，未接入引擎池）。均按次计费 0.01 元/次"
+  },
+  "deep_search": {
+    "planner_model": "deepseek-v4.1-flash",
+    "writer_model": "deepseek-v4.1-flash",
+    "max_llm_calls": 4,
+    "max_engine_calls": 12,
+    "rounds": 2,
+    "fuse": 2,
+    "_说明": "fuse=每节点并发搜索引擎数（RRF 融合+守门分档）；大小杯暂统一 deepseek-v4.1-flash（2026-09-13 用户指令，原 qwen3.7-plus/deepseek-v4-flash）"
+  },
+  "block_domains": [],
+  "ocr": {
+    "vl_model": "Doubao-1.5-vision-pro-32k",
+    "_说明": "vl=视觉大模型通道默认模型（2026-08 实测转录保真第一）；easyocr 为本地免费兜底"
+  },
+  "zhipu": {
+    "search_engine": "search_std",
+    "api_base": "https://open.bigmodel.cn/api/paas/v4/web_search",
+    "_说明": "search_engine 可换 search_pro(0.03)/search_pro_sogou(0.05)/search_pro_quark(0.05)；api_base 可指向代理；引擎恒传 search_intent=false（true 实测 0 条）；count 服务端不严格遵守（客户端截断）"
+  }
+}

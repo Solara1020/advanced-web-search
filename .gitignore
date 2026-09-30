@@ -1,0 +1,16 @@
+# 密钥与隐私（含明文 key，禁止提交/分享）
+secrets.json
+*.secret
+
+# 查询缓存（含查询内容与结果）
+cache.db
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 本机产物
+*.png
+*.pdf
+out/
