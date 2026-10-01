@@ -1,8 +1,8 @@
 ---
 name: advanced-web-search
 description: |-
-  通用线上搜索与研究执行器（多引擎冗余）：文搜网（9 引擎注册：默认池 7 引擎自动降级 tavily/智谱 Web Search/百炼 MCP/百炼增强版 EnhancedSearch/Bing/百度/DuckDuckGo + 按需 zhipu_sogou/Wikimedia 百科；--fuse N 并发多引擎 RRF 融合、--cross-verify 多引擎共识检测、--days 原生时间过滤、查询缓存 sqlite TTL 6h、jieba 相关性分档 relevant_count、招生广告/软文过滤）、网页正文提取（web extractor 四层：bs4启发式/Playwright渲染/StealthyFetcher反检测过Cloudflare/Jina）、平台站内数据适配器（B站 UP主粉丝数/视频播放点赞/竖横屏，免签名接口）、文搜图（Bing + 百度图片 + 智谱 MCP）、图搜文（OCR 三通道：视觉大模型/easyocr/tesseract）、图搜图（百度识图 Playwright 版可用 + 智谱 MCP 公网图 URL 反向搜索/图出处/区域放大 + 本地 dhash/phash）、文搜视频（Bing 视频）、深度研究（deep_search 双层多智能体：DAG拆解→fuse融合搜索→缺口补搜→带引用报告）、可选 embedding 向量化与 /v1/rerank 真端点重排（默认关闭，效果优先选型）。
-  Use when the user asks to: search the web for anything, verify or check up-to-date information, batch-collect links, read/extract the main content of any webpage (web extractor, including Cloudflare-protected sites), get Bilibili creator/video stats (fans, views, likes), find images from text, transcribe a photo or screenshot, reverse image search (Baidu Graph working), OCR a picture, or run a multi-step deep research on a question. Trigger even when the user does not say "search" — look for phrasings like "帮我查一下", "查查最新", "2026 分数线", "这个截图里写的什么", "B站这个UP主多少粉丝", "这个视频多少播放", "找类似图片", "以图搜图", "深度调研", "研究一下".
+通用线上搜索与研究执行器（agent skill）：多引擎文搜网（9 引擎自动降级、--fuse RRF 融合、--cross-verify 多引擎共识检测、--days 时间过滤、查询缓存、广告软文过滤、相关性分档）、网页正文提取四层降级（web extractor，可过 Cloudflare 反爬）、B站站内数据（粉丝/播放/点赞）、文搜图、图搜图（百度识图/智谱反向图搜/区域放大/本地哈希）、OCR 图搜文三通道、文搜视频、深度研究 deep_search（拆解→并发搜索→缺口补搜→带引用报告）、可选 embedding 向量化与 rerank 重排。
+Use when the user asks to: search the web for anything, verify or check up-to-date information, batch-collect links, read/extract the main content of any webpage (web extractor, including Cloudflare-protected sites), get Bilibili creator/video stats (fans, views, likes), find images from text, transcribe a photo or screenshot, reverse image search, OCR a picture, or run a multi-step deep research. Trigger even when the user does not say "search" — e.g. "帮我查一下", "查查最新", "2026 分数线", "这个截图里写的什么", "B站这个UP主多少粉丝", "这个视频多少播放", "找类似图片", "以图搜图", "深度调研", "研究一下".
 ---
 
 # Advanced Web Search（通用联网搜索）
