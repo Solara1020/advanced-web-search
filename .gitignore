@@ -10,6 +10,9 @@ cache.db
 __pycache__/
 *.py[cod]
 
+# 运行日志（含查询内容）
+logs/
+
 # 本机产物
 *.png
 *.pdf

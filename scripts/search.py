@@ -8,20 +8,135 @@
   python search.py "查询词" --count 20 --rerank          # 结果按查询相关度重排（DMXAPI向量）
   python search.py "查询词" --cross-verify 3 --engine bing_html,baidu_html,zhipu   # 共识检测
   python search.py "查询词" --days 7 --engine zhipu      # 原生时间过滤（zhipu/tavily 支持）
+  python search.py "查询词" --deadline 10     # 首个引擎成功后再等 10s 就放弃慢引擎
+  python search.py "查询词" --no-merge        # 关闭"同事件转载折叠"（默认开）
   python search.py "查询词" --no-ads           # 丢弃疑似招生广告/软文（默认只打标下沉）
   python search.py "查询词" --no-cache         # 跳过查询缓存（默认 TTL 6h，命中标 cache 字段）
   python search.py "查询词" --embed                      # 结果附加向量（供后续聚类/去重）
-输出: JSON {query, engine_used, items:[{title,url,snippet,engine,engines,consensus,ad_suspect}],
-           relevant_count, warning, cross_verify, time_filter, ad_filter, quality_notes, cache, skipped}
+输出: JSON {run_id, query, engine_used, items:[{title,url,snippet,engine,engines,consensus,ad_suspect,
+           other_sources,date_source}], relevant_count, warning, cross_verify, time_filter, ad_filter,
+           quality_notes, cache, rescued_via, elapsed_ms, skipped}
+       运行日志默认写 logs/runs_YYYYMM.jsonl（config.log_runs.enabled=false 可关）。
 依赖: engines.py + common.py + cache.py（requests/bs4；sqlite3 为标准库）
 """
 import argparse
 import json
 import re
 import sys
+import time
+import uuid
 
 from common import load_config, normalize_url
 import engines
+
+
+def make_run_id():
+    """每次搜索一个运行标识：便于"这份结果有问题"时按 run_id 回查运行日志定位。"""
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+
+
+def write_run_log(run_id, result, config, elapsed_ms):
+    """运行日志（默认开，`config.log_runs.enabled=false` 关闭）：JSONL 追加到 `logs/runs_YYYYMM.jsonl`。
+    只记元信息（run_id/查询/引擎/过滤统计/耗时），不记密钥与正文；**任何失败静默**（日志绝不能影响搜索）。"""
+    cfg = (config or {}).get("log_runs") or {}
+    if cfg.get("enabled") is False:
+        return
+    try:
+        from pathlib import Path
+        d = Path(cfg.get("dir") or (Path(__file__).resolve().parent.parent / "logs"))
+        d.mkdir(parents=True, exist_ok=True)
+        row = {"run_id": run_id, "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+               "query": result.get("query"), "engine_used": result.get("engine_used"),
+               "total": result.get("total"), "relevant_count": result.get("relevant_count"),
+               "ad_flagged": (result.get("ad_filter") or {}).get("flagged"),
+               "cache_hit": (result.get("cache") or {}).get("hit"),
+               "rescued_via": result.get("rescued_via"),
+               "quality_notes": len(result.get("quality_notes") or []),
+               "elapsed_ms": elapsed_ms, "skipped": result.get("skipped")}
+        with open(d / f"runs_{time.strftime('%Y%m')}.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+_DATE_RE = re.compile(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})")
+
+
+def annotate_date_source(items):
+    """日期来源标注（不强求口径）：结构字段（引擎给的 publish_date）→ structured；
+    标题/摘要里能正则蹭到 → snippet + date_text；**没有就不标、不单独花功夫去查**（用户 2026-10-01 口径）。"""
+    for it in items:
+        if it.get("publish_date"):
+            it["date_source"] = "structured"
+            continue
+        m = _DATE_RE.search((it.get("title") or "") + " " + (it.get("snippet") or ""))
+        if m:
+            it["date_source"] = "snippet"
+            it["date_text"] = m.group(0)
+    return items
+
+
+def collapse_duplicates(items, threshold=0.85):
+    """标题模糊去重合并：同事件多站转载折叠为「代表条目 + other_sources」。
+    代表取排序最前者；合并进来的转载记入 other_sources[{engine,url,title}]；广告标记向下继承（若成员已标）。
+    只对标题长度 >=8 的条目生效；阈值越高越保守（默认 0.85，可 config.dedupe.title_threshold 调）。"""
+    reps, out = [], []
+    for it in items:
+        title = (it.get("title") or "").strip()
+        placed = False
+        if len(title) >= 8:
+            for rep in reps:
+                if abs(len(rep.get("title") or "") - len(title)) > 20:
+                    continue
+                if _title_sim(title, rep.get("title") or "") >= threshold:
+                    rep.setdefault("other_sources", []).append(
+                        {"engine": it.get("engine"), "url": it.get("url"), "title": title[:80]})
+                    if it.get("ad_suspect"):
+                        rep["ad_suspect"] = True
+                        rep["ad_signals"] = sorted(set((rep.get("ad_signals") or []) + (it.get("ad_signals") or [])))
+                    if it.get("ad_hits"):
+                        rep["ad_hits"] = sorted(set((rep.get("ad_hits") or []) + it["ad_hits"]))[:5]
+                    placed = True
+                    break
+        if not placed:
+            reps.append(it)
+            out.append(it)
+    return out
+
+
+def _safe_call(fn):
+    try:
+        return fn()
+    except Exception as e:
+        return e
+
+
+def _run_engines_parallel(jobs, deadline=None):
+    """daemon 线程并发执行 jobs=[(name, callable)] → (结果字典, 被放弃引擎列表)。
+
+    deadline（秒，0/None=关）：**首个成功结果出现后**再等 N 秒，到点放弃剩余引擎（治慢引擎拖尾）。
+    用 daemon 线程而非 ThreadPoolExecutor：被放弃的慢引擎不会阻塞进程退出（否则 deadline 形同虚设）。"""
+    import queue
+    import threading
+    q = queue.Queue()
+    for name, fn in jobs:
+        threading.Thread(target=lambda n=name, f=fn: q.put((n, _safe_call(f))), daemon=True).start()
+    got, first_ok_at, abandoned = {}, None, []
+    while len(got) < len(jobs):
+        if first_ok_at and deadline and (time.time() - first_ok_at) > deadline:
+            abandoned = [n for n, _ in jobs if n not in got]
+            break
+        wait = 0.2
+        if first_ok_at and deadline:
+            wait = max(0.05, deadline - (time.time() - first_ok_at))
+        try:
+            n, res = q.get(timeout=wait)
+        except queue.Empty:
+            continue
+        got[n] = res
+        if isinstance(res, list) and res and first_ok_at is None:
+            first_ok_at = time.time()
+    return got, abandoned
 
 
 
@@ -323,29 +438,28 @@ def domain_concentration(items, min_items=4, ratio=0.7):
     return notes
 
 
-def fetch_all_fused(query, order, count, timeout, config, fuse_n, days=None):
-    """并发取前 fuse_n 个可用引擎，RRF 融合（互相纠偏，单引擎垃圾被稀释）。"""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+def fetch_all_fused(query, order, count, timeout, config, fuse_n, days=None, deadline=None):
+    """并发取前 fuse_n 个可用引擎，RRF 融合（互相纠偏，单引擎垃圾被稀释）。
+    deadline：首个引擎成功后最多再等 N 秒（0/None=关）——治慢引擎拖尾。"""
     usable = [n for n in order if n in engines.ENGINES][:fuse_n]
+    jobs = [(n, (lambda n=n: _call_engine(n, query, count, timeout, config, days))) for n in usable]
+    got, abandoned = _run_engines_parallel(jobs, deadline=deadline)
     lists, used, skipped = [], [], []
-    with ThreadPoolExecutor(max_workers=len(usable) or 1) as ex:
-        futs = {ex.submit(_call_engine, n, query, count, timeout, config, days): n
-                for n in usable}
-        for fut in as_completed(futs):
-            n = futs[fut]
-            try:
-                items = fut.result()
-                if items:
-                    used.append(n)
-                    for it in items:
-                        it["engine"] = n
-                    lists.append(items)
-                else:
-                    skipped.append(f"{n}: 零结果")
-            except KeyError as e:
-                skipped.append(f"{n}: 缺 key（{e}）")
-            except Exception as e:
-                skipped.append(f"{n}: {type(e).__name__} {str(e)[:80]}")
+    for n, res in got.items():
+        if isinstance(res, Exception):
+            if isinstance(res, KeyError):
+                skipped.append(f"{n}: 缺 key（{res}）")
+            else:
+                skipped.append(f"{n}: {type(res).__name__} {str(res)[:80]}")
+        elif res:
+            used.append(n)
+            for it in res:
+                it["engine"] = n
+            lists.append(res)
+        else:
+            skipped.append(f"{n}: 零结果")
+    for n in abandoned:
+        skipped.append(f"{n}: 首引擎成功后 {deadline}s 未返回（deadline 放弃等待）")
     merged = rrf_merge(lists)
     return merged, used, skipped
 
@@ -416,12 +530,19 @@ def main():
                     help="只看最近 N 天：zhipu/tavily 走引擎原生时间过滤，不支持的原生过滤的引擎如实标注"
                          "（HTML 引擎没有该能力，不伪装——别拿 --days 当硬保证）")
     ap.add_argument("--no-cache", action="store_true", help="跳过查询缓存（默认开，TTL 6h；时效敏感查询用）")
+    ap.add_argument("--deadline", type=int, default=None, metavar="S",
+                    help="并发搜索时，首个引擎成功后再等 S 秒即放弃剩余慢引擎（默认取 config.deadline_seconds，0=关）")
+    ap.add_argument("--no-merge", action="store_true", help="关闭标题模糊去重合并（默认开：同事件多站转载折叠为一条+other_sources）")
     ap.add_argument("--embed", action="store_true", help="输出附加向量（默认关闭）")
     ap.add_argument("--strict", action="store_true", help="只保留相关性 high 的结果（默认全保留仅打标）")
     args = ap.parse_args()
+    t0 = time.time()
+    run_id = make_run_id()
     config = load_config()
     count = args.count or config.get("default_count", 10)
     timeout = config.get("timeout_seconds", 15)
+    deadline = args.deadline if args.deadline is not None else int(config.get("deadline_seconds") or 0)
+    deadline = deadline or None
 
     if args.engine and args.engine != "auto":
         order = [e.strip() for e in args.engine.split(",") if e.strip()]
@@ -440,13 +561,17 @@ def main():
     cfg_fp = ckey(json.dumps({k: v for k, v in config.items() if k != "api_keys"},
                              sort_keys=True, ensure_ascii=False))
     ck = ckey("search", args.query, ",".join(order), count, fuse_n, cv_n,
-              args.days, args.no_ads, args.rerank, args.embed, args.strict, args.read, cfg_fp)
+              args.days, args.no_ads, args.rerank, args.embed, args.strict, args.read,
+              args.no_merge, deadline, cfg_fp)
     if not args.no_cache:
         hit = cget(ck, config)
         if hit:
             payload, age_min = hit
+            payload["origin_run_id"] = payload.get("run_id")
+            payload["run_id"] = run_id
             payload["cache"] = {"hit": True, "age_minutes": age_min}
             print(f"缓存命中（{age_min} 分钟前结果；--no-cache 强制重搜）", file=sys.stderr)
+            write_run_log(run_id, payload, config, int((time.time() - t0) * 1000))
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return
 
@@ -461,10 +586,29 @@ def main():
                   f"——建议 --engine zhipu 或 tavily", file=sys.stderr)
 
     if fuse_n:
-        merged, used, skipped = fetch_all_fused(args.query, order, count, timeout, config, fuse_n, days=args.days)
+        merged, used, skipped = fetch_all_fused(args.query, order, count, timeout, config, fuse_n,
+                                                days=args.days, deadline=deadline)
     else:
         merged, used, skipped = fetch_all(args.query, order, count, timeout, config, days=args.days)
     items = dedupe(merged)
+
+    # ---- 空结果救援：初轮全空时换用尚未尝试的池内引擎有界重试一次 ----
+    rescued_via = None
+    if not items and (config.get("rescue") or {}).get("enabled", True):
+        tried = set(n for n in order if n in engines.ENGINES)
+        pool = [n for n in (config.get("engine_priority") or []) if n in engines.ENGINES and n not in tried]
+        if pool:
+            r_merged, r_used, r_skipped = fetch_all_fused(args.query, pool, count, timeout, config,
+                                                          min(2, len(pool)), days=args.days, deadline=deadline)
+            r_items = dedupe(r_merged)
+            skipped.extend([f"rescue/{s}" for s in r_skipped])
+            if r_items:
+                items, rescued_via = r_items, r_used
+                used = used + [n for n in r_used if n not in used]
+                print(f"⚠️ 引擎池初轮全空，已救援：{r_used}", file=sys.stderr)
+        else:
+            skipped.append("rescue: 无未尝试的池内引擎可用")
+
     blocked = config.get("block_domains") or []
     if blocked:
         items = [it for it in items if not any(b in it.get("url", "") for b in blocked)]
@@ -479,8 +623,16 @@ def main():
         num_consensus = number_consensus(items, int(cv_cfg.get("min_number_engines", 2)))
         cv_summary["number_consensus"] = num_consensus
 
+    # ---- 标题模糊去重合并（共识统计之后做，不影响引擎计数）----
+    merged_dupes = 0
+    if not args.no_merge and (config.get("dedupe") or {}).get("enabled", True):
+        before = len(items)
+        items = collapse_duplicates(items, float((config.get("dedupe") or {}).get("title_threshold", 0.85)))
+        merged_dupes = before - len(items)
+
     items, ad_stats = ad_filter(items, config, drop=args.no_ads)
     items = rescore(items, config.get("rescore_domains") or [])
+    items = annotate_date_source(items)
     quality = domain_concentration(items)
 
     if args.read:
@@ -505,21 +657,27 @@ def main():
         except Exception as e:
             skipped.append(f"embed/rerank: {type(e).__name__} {str(e)[:100]}")
 
-    result = {"query": args.query, "engine_used": used,
+    result = {"run_id": run_id, "query": args.query, "engine_used": used,
               "total": len(items), "relevant_count": rel_count,
               "warning": rel_warn,
               "items": items, "skipped": skipped}
+    if rescued_via:
+        result["rescued_via"] = rescued_via
     if cv_summary is not None:
         result["cross_verify"] = cv_summary
     result["ad_filter"] = ad_stats
+    if merged_dupes:
+        result["merged_duplicates"] = merged_dupes
     if time_filter:
         result["time_filter"] = time_filter
     if quality:
         result["quality_notes"] = quality
     from datetime import datetime
+    result["elapsed_ms"] = int((time.time() - t0) * 1000)
     result["cache"] = {"hit": False, "stored_at": datetime.now().isoformat(timespec="seconds")}
     if not args.no_cache:
         cput(ck, result, config)
+    write_run_log(run_id, result, config, result["elapsed_ms"])
     if rel_warn:
         print(f"⚠️ {rel_warn}", file=sys.stderr)
     for note in quality:

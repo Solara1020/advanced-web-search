@@ -20,6 +20,7 @@
 """
 import json
 import re
+import threading
 import time
 from urllib.parse import quote_plus, parse_qs, urlparse
 
@@ -46,10 +47,31 @@ def _get(url, hdr=None, timeout=15, params=None, proxies=None):
 
 # ---------- 免 key HTML 引擎 ----------
 
+_bing_local = threading.local()
+
+
+def _bing_session(timeout=10):
+    """每线程一份预热过的 Bing session（进程内复用）：先访问首页拿 cookie。
+    2026-10-01 A/B 实测：不预热时部分查询整页跑题（"重庆 高考冲刺班 提分" 10/10 全是华为官网），
+    预热 + form=QBRE 后恢复正常，且正常查询的结果与不预热完全一致（无副作用）。"""
+    s = getattr(_bing_local, "sess", None)
+    if s is None:
+        s = requests.Session()
+        try:
+            s.get("https://www.bing.com/", headers=headers(), timeout=min(timeout, 10))
+        except Exception:
+            pass  # 预热失败也继续（退化为旧行为，不影响可用性）
+        _bing_local.sess = s
+    return s
+
+
 def bing_html(query, count=10, timeout=15, config=None):
     # 注意：bing 对引号严格查询常返回零结果+推荐卡片（复用b_algo类，解析即垃圾）——不加引号
-    url = f"https://www.bing.com/search?q={quote_plus(query)}&count={min(max(count, 10), 50)}&mkt=zh-CN&setlang=zh-hans"
-    soup = BeautifulSoup(_get(url, headers(), timeout).text, "html.parser")
+    # 预热 + form=QBRE：治"整页离题诱饵页"（2026-10-01 实测，见 TROUBLESHOOTING.md）
+    url = (f"https://www.bing.com/search?q={quote_plus(query)}"
+           f"&count={min(max(count, 10), 50)}&mkt=zh-CN&setlang=zh-hans&form=QBRE")
+    r = _bing_session(timeout).get(url, headers=headers(), timeout=timeout)
+    soup = BeautifulSoup(r.text, "html.parser")
     items = []
     for li in soup.select("li.b_algo"):
         a = li.select_one("h2 a")
@@ -387,6 +409,7 @@ TIME_CAPABLE = {"zhipu", "zhipu_sogou", "tavily"}
 
 # 引擎可达性备注（写入结果便于排障）
 NOTES = {
+    "bing_html": "国内可达；预热 cookie+QBRE 治整页离题（2026-10-01 实测）",
     "ddg_html": "默认网络被墙，需梯子（vpn_engines 分流自动走代理）",
     "tavily": "免费 1000 次/月，需 TAVILY_API_KEY；索引为 AI 检索调优，官方页命中率最高",
     "bailian": "需 DASHSCOPE_API_KEY；国内直连，中文质量高",

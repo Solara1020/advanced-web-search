@@ -142,7 +142,7 @@
 | bailian | ⭐⭐⭐⭐ | 中文质量好，key 已配（旧文件兜底） |
 | zhipu | ⭐⭐⭐⭐ | 智谱 search_std（0.01元/次）：返回带 **publish_date** 发布时间字段；支持 count(1-50)/时间过滤/域名过滤/content_size。⚠️坑：①count 不按传入值精确返回（请求10返15或50，客户端截断兜底）②link 有邮箱畸形/全空条目（已过滤）③`search_intent=true` 会致 0 条（引擎恒传 false） |
 | zhipu_sogou | ⭐⭐⭐ | 智谱 search_pro_sogou（0.05元/次）：域名面宽（央媒/教育垂直/gov.cn/toutiao/sohu）。⚠️**知乎覆盖：官方明确宣称可抓，我方 2026-09-23 多条件实测（3 种域名格式 × 2 种 intent × 多次查询）全为 0 条；对照组 www.sohu.com/www.toutiao.com 各 15 条证明 domain_filter 机制正常——宣传与实测冲突，并列如实记录**。默认池不启用（按需调用） |
-| bing_html | ⭐⭐⭐ | 引号严格查询会给推荐卡（守门已治）；别给它加引号 |
+| bing_html | ⭐⭐⭐⭐ | 引号严格查询会给推荐卡（守门已治）；别给它加引号。**2026-10-01 修复整页离题**：cookie 预热 + form=QBRE（A/B 实测有效，正常查询结果不变） |
 | baidu_html | ⭐⭐⭐⭐ | **2026-09 根治**：Scrapling TLS 指纹 + `mu` 属性直出真实 URL + class-free 摘要（容器文本剥标题，免疫改版）。此前 content-right_8Zs40 类名失效致空摘要 |
 | ddg_html | ⭐⭐⭐ | 需梯子（vpn_engines 自动分流） |
 | enhanced_search | ⭐⭐⭐⭐ | 百炼 EnhancedSearch（search_pro）：10/10 全相关无脏结果，摘要全非空；⚠️"权威站点优先"实测打折——来源偏 sohu/toutiao 自媒体，政府页命中反不如 tavily；固定 10 条无 count 参数；与 bailian 基础版（有脏结果风险）fuse 互补好 |
@@ -158,7 +158,7 @@
 | `重庆 高考 政策` | `cq.gov.cn` / `jw.cq.gov.cn` / `cqzk.com.cn` / `cqksy.cn` | ✅ 官方站优先，正常 |
 | `2026 重庆 高考 报名 时间` | 整页"国务院节假日安排/日历"类无关结果 | ❌ 跑题（靠守门剔除） |
 
-**对策（已实现）**：`relevance_gate` 拦不住这类（标题含"重庆"即算相关）→ 新增 **`quality_notes` 单一域名占榜检测**（按引擎分组，某引擎结果单一域名占比 ≥70% 且 ≥4 条时告警）。遇此告警请换查询说法（拆开加空格常有效）或换引擎复核。
+**对策（已实现，两层）**：①**根治（2026-10-01）**：cookie 预热 + `form=QBRE`——A/B 实测把"整页华为官网"级离题恢复正常，正常查询结果不变（见 TROUBLESHOOTING.md）；②`quality_notes` 单一域名占榜检测（按引擎分组，≥70% 且 ≥4 条告警）保留兜底。遇告警仍可换查询说法（拆开加空格）或换引擎复核。
 
 ## read_page 四层与反爬
 

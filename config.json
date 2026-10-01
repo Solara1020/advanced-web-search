@@ -108,5 +108,20 @@
     "search_engine": "search_std",
     "api_base": "https://open.bigmodel.cn/api/paas/v4/web_search",
     "_说明": "search_engine 可换 search_pro(0.03)/search_pro_sogou(0.05)/search_pro_quark(0.05)；api_base 可指向代理；引擎恒传 search_intent=false（true 实测 0 条）；count 服务端不严格遵守（客户端截断）"
-  }
+  },
+  "log_runs": {
+    "enabled": true,
+    "dir": "",
+    "_说明": "运行日志（JSONL，logs/runs_YYYYMM.jsonl，已 gitignore）：run_id/查询/引擎/过滤统计/耗时；默认开启，置 enabled:false 关闭"
+  },
+  "dedupe": {
+    "enabled": true,
+    "title_threshold": 0.85,
+    "_说明": "标题模糊去重合并：同事件多站转载折叠为「代表条目+other_sources」；阈值越高越保守；单次用 --no-merge 关闭"
+  },
+  "rescue": {
+    "enabled": true,
+    "_说明": "空结果救援：初轮全空时换用未尝试的池内引擎有界重试一次，输出标 rescued_via"
+  },
+  "deadline_seconds": 0
 }
